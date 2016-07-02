@@ -129,22 +129,57 @@ Colu.prototype.signAndTransmit = function (assetInfo, attempts, callback) {
   var lastTxid = assetInfo.financeTxid
   var addresses = ColoredCoins.getInputAddresses(txHex, self.network)
   if (!addresses) return callback("can't find addresses to fund")
+
+  var redeemScripts = []
+  var p2shAddresses = []
+
   async.map(addresses,
     function (address, cb) {
-      self.hdwallet.getAddressPrivateKey(address, cb)
-    },
-    function (err, privateKeys) {
-      if (err) return callback(err)
-      var signedTxHex = ColoredCoins.signTx(txHex, privateKeys)
-      self.transmit(signedTxHex, lastTxid, function (err, resp) {
-        if (err) {
-          if (!err.assetInfo) return callback(err)
-          // try fallback:
-          return self.signAndTransmit(err.assetInfo, attempts + 1, callback)
-        }
-        assetInfo.txid = resp.txid2.txid
-        callback(null, assetInfo)
+      self.hdwallet.getP2SHAddressData(addresses[i], function(err, p2shData) {
+        if (err) cb(null, null)
+        cb(null, p2shData)
       })
+    },
+    function(err, p2shAddressesData) {
+      for (var i = 0; i < p2shAddressesData.length; i++) {
+        if (!p2shAddressesData[i]) return
+        p2shAddresses.push({ address: addresses[i], index: i })
+        addresses[i] = p2shAddressesData[i].localAddress
+        redeemScripts[i] = p2shAddressesData[i].redeemScript
+      }
+      async.map(addresses,
+        function (address, cb) {
+          self.hdwallet.getAddressPrivateKey(address, cb)
+        },
+        function (err, privateKeys) {
+          if (err) return callback(err)
+          var signedTxHex = ColoredCoins.signTx(txHex, privateKeys, redeemScripts)
+
+          aync.reduce(p2shAddresses, signedTxHex,
+            function(tx, address, cb) {
+              request.post('http://0.0.0.0:6382/sign', { form: {
+                tx_hex: tx,
+                input_index: address.index,
+                p2sh_address: address.address
+              } }, function(err, httpResponse, body) {
+                if (err) return cb(err)
+                return cb(null, JSON.parse(body).signed_tx)
+              })},
+            function(err, fullySignedTxHex) {
+              if (err) return callback(err)
+              self.transmit(fullySignedTxHex, lastTxid, function (err, resp) {
+                if (err) {
+                  if (!err.assetInfo) return callback(err)
+                  // try fallback:
+                  return self.signAndTransmit(err.assetInfo, attempts + 1, callback)
+                }
+                assetInfo.txid = resp.txid2.txid
+                callback(null, assetInfo)
+              })
+            }
+          )
+        }
+      )
     }
   )
 }
