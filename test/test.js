@@ -112,5 +112,51 @@ describe('Test Colu SDK', function () {
       done()
     })
   })
+})
 
+describe("escrow server tests", function() {
+  var settings = {
+    "network": "testnet",
+    "privateSeed":"1d7f034f59ed9150e055f7931f7f7543ed0bb6e551946f407b7171fed2e8b40f",
+    "apiKey": ""
+  }
+
+  var args = 	{
+    "from": ["mkMiyarPHVLy2hNz4vHmtBSmj1qZ1rf2Qg"],
+    "to": [{
+      "assetId": "La8NMrw1s78sj6dihB6q4VLtQEBwFjZb2ixtWx",
+      "amount": "1"
+    }],
+    "metadata": {
+      "assetName": "Mission Impossible 15",
+      "issuer": "Fox Theater",
+      "description": "Movie ticket to see the New Tom Cruise flick"
+    }
+  }
+
+  it('should sign a p2sh transaction', function(done) {
+    this.timeout(50000)
+    var colu = new Colu(settings)
+    colu.on('connect', function () {
+      // send to multisig address
+      var p2shAddress = colu.getP2SHAddress()
+      args.to[0].address = p2shAddress
+
+      colu.sendAsset(args, function (err, ans) {
+        if (err) throw err
+        testUtils.verifySendAssetResponse(ans)
+
+        // send back from multisig address
+        args.to[0].address = args.from[0]
+        args.from = [p2shAddress]
+
+        colu.sendAsset(args, function (err, ans) {
+          if (err) throw err
+          testUtils.verifySendAssetResponse(ans)
+          done()
+        })
+      })
+    })
+    colu.init()
+  })
 })
