@@ -84200,7 +84200,7 @@ Colu.prototype.signAndTransmit = function (assetInfo, attempts, callback) {
   async.map(addresses,
     function (address, cb) {
       self.hdwallet.getP2SHAddressData(address, function(err, p2shData) {
-        if (err) cb(null, null)
+        if (err) return cb(null, null)
         cb(null, p2shData)
       })
     },
