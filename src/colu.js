@@ -142,7 +142,7 @@ Colu.prototype.signAndTransmit = function (assetInfo, attempts, callback) {
     },
     function(err, p2shAddressesData) {
       for (var i = 0; i < p2shAddressesData.length; i++) {
-        if (!p2shAddressesData[i]) return
+        if (!p2shAddressesData[i]) continue
         p2shAddresses.push({ address: addresses[i], index: i })
         addresses[i] = p2shAddressesData[i].localAddress
         redeemScripts[i] = p2shAddressesData[i].redeemScript
@@ -155,7 +155,7 @@ Colu.prototype.signAndTransmit = function (assetInfo, attempts, callback) {
           if (err) return callback(err)
           var signedTxHex = ColoredCoins.signTx(txHex, privateKeys, redeemScripts)
 
-          aync.reduce(p2shAddresses, signedTxHex,
+          async.reduce(p2shAddresses, signedTxHex,
             function(tx, address, cb) {
               request.post('http://0.0.0.0:6382/sign', { form: {
                 tx_hex: tx,
