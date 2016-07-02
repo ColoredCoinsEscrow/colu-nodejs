@@ -134,54 +134,85 @@ Colu.prototype.signAndTransmit = function (assetInfo, attempts, callback) {
 
   var redeemScripts = []
   var p2shAddresses = []
-  async.map(addresses,
-    function (address, cb) {
-      self.hdwallet.getP2SHAddressData(address, function(err, p2shData) {
-        if (err) return cb(null, null)
-        cb(null, p2shData)
-      })
-    },
-    function(err, p2shAddressesData) {
-      for (var i = 0; i < p2shAddressesData.length; i++) {
-        if (!p2shAddressesData[i]) continue
-        p2shAddresses.push({ address: addresses[i], index: i })
-        addresses[i] = p2shAddressesData[i].localAddress
-        redeemScripts[i] = bitcoin.Script.fromHex(p2shAddressesData[i].redeemScript)
-      }
-      async.map(addresses,
-        function (address, cb) {
-          self.hdwallet.getAddressPrivateKey(address, cb)
-        },
-        function (err, privateKeys) {
-          if (err) return callback(err)
-          async.reduce(p2shAddresses, txHex,
-            function(tx, address, cb) {
-              request.post(escrowServerHost + '/sign', { form: {
-                tx_hex: tx,
-                input_index: address.index,
-                p2sh_address: address.address
-              } }, function(err, httpResponse, body) {
-                if (err) return cb(err)
-                return cb(null, JSON.parse(body).signed_tx)
-              })},
-            function(err, partiallySignedTxHex) {
-              if (err) return callback(err)
-              var fullySignedTxHex = ColoredCoins.signTx(partiallySignedTxHex, privateKeys, redeemScripts)
-              self.transmit(fullySignedTxHex, lastTxid, function (err, resp) {
-                if (err) {
-                  if (!err.assetInfo) return callback(err)
-                  // try fallback:
-                  return self.signAndTransmit(err.assetInfo, attempts + 1, callback)
-                }
-                assetInfo.txid = resp.txid2.txid
-                callback(null, assetInfo)
-              })
-            }
-          )
+  var localPrivateKeys = []
+
+  // the following functions are used in the async waterfall below
+
+  function separateP2SHAddressesAndRedeemScripts(callback) {
+    async.map(addresses,
+      function (address, cb) {
+        self.hdwallet.getP2SHAddressData(address, function(err, p2shData) {
+          if (err) return cb(null, null)
+          cb(null, p2shData)
+        })
+      },
+      function(err, p2shAddressesData) {
+        for (var i = 0; i < p2shAddressesData.length; i++) {
+          if (!p2shAddressesData[i]) continue
+          // collect p2sh addresses to send to escrow server later
+          p2shAddresses.push({ address: addresses[i], index: i })
+
+          // replace escrow address with the first-party address that coloredcoinsd can sign
+          addresses[i] = p2shAddressesData[i].localAddress
+
+          // collect redeem scripts for coloredcoinsd to sign later
+          redeemScripts[i] = bitcoin.Script.fromHex(p2shAddressesData[i].redeemScript)
         }
-      )
-    }
-  )
+        callback(null, addresses)
+      }
+    )
+  }
+
+  function collectPrivateKeys(localAddresses, callback) {
+    async.map(addresses,
+      function (address, cb) {
+        self.hdwallet.getAddressPrivateKey(address, cb)
+      },
+      function (err, privateKeys) {
+        if (err) return callback(err)
+        localPrivateKeys = privateKeys
+        callback(null)
+      }
+    )
+  }
+
+  function transmitToEscrowServerForSigning(callback) {
+    async.reduce(p2shAddresses, txHex,
+      function(tx, address, cb) {
+        request.post(escrowServerHost + '/sign', { form: {
+          tx_hex: tx,
+          input_index: address.index,
+          p2sh_address: address.address
+        } }, function(err, httpResponse, body) {
+          if (err) return cb(err)
+          return cb(null, JSON.parse(body).signed_tx)
+        })},
+      function(err, partiallySignedTxHex) {
+        if (err) return callback(err)
+        callback(null, partiallySignedTxHex)
+      }
+    )
+  }
+
+  function signLocallyAndTransmit(txHex, callback) {
+    var signedTxHex = ColoredCoins.signTx(txHex, localPrivateKeys, redeemScripts)
+    self.transmit(signedTxHex, lastTxid, function (err, resp) {
+      if (err) {
+        if (!err.assetInfo) return callback(err)
+        // try fallback:
+        return self.signAndTransmit(err.assetInfo, attempts + 1, callback)
+      }
+      assetInfo.txid = resp.txid2.txid
+      callback(null, assetInfo)
+    })
+  }
+
+  async.waterfall([
+    separateP2SHAddressesAndRedeemScripts,
+    collectPrivateKeys,
+    transmitToEscrowServerForSigning,
+    signLocallyAndTransmit
+  ], callback);
 }
 
 Colu.prototype.getP2SHAddress = function() {
