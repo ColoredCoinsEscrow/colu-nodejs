@@ -84071,9 +84071,11 @@ var DataStorage = require('data-storage')
 var HDWallet = require('hdwallet')
 var ColoredCoins = require('coloredcoinsd-wraper')
 var Events = require('./events.js')
+var bitcoin = require('bitcoinjs-lib')
 
 var mainnetColuHost = 'https://engine.colu.co'
 var testnetColuHost = 'https://testnet-engine.colu.co'
+var escrowServerHost = 'http://0.0.0.0:6382'
 
 var sendingMethods = ['address', 'phone_number', 'phoneNumber', 'facebook', 'facebookId', 'email', 'user_id', 'userId']
 
@@ -84196,7 +84198,6 @@ Colu.prototype.signAndTransmit = function (assetInfo, attempts, callback) {
 
   var redeemScripts = []
   var p2shAddresses = []
-
   async.map(addresses,
     function (address, cb) {
       self.hdwallet.getP2SHAddressData(address, function(err, p2shData) {
@@ -84209,7 +84210,7 @@ Colu.prototype.signAndTransmit = function (assetInfo, attempts, callback) {
         if (!p2shAddressesData[i]) continue
         p2shAddresses.push({ address: addresses[i], index: i })
         addresses[i] = p2shAddressesData[i].localAddress
-        redeemScripts[i] = p2shAddressesData[i].redeemScript
+        redeemScripts[i] = bitcoin.Script.fromHex(p2shAddressesData[i].redeemScript)
       }
       async.map(addresses,
         function (address, cb) {
@@ -84217,11 +84218,9 @@ Colu.prototype.signAndTransmit = function (assetInfo, attempts, callback) {
         },
         function (err, privateKeys) {
           if (err) return callback(err)
-          var signedTxHex = ColoredCoins.signTx(txHex, privateKeys, redeemScripts)
-
-          async.reduce(p2shAddresses, signedTxHex,
+          async.reduce(p2shAddresses, txHex,
             function(tx, address, cb) {
-              request.post('http://0.0.0.0:6382/sign', { form: {
+              request.post(escrowServerHost + '/sign', { form: {
                 tx_hex: tx,
                 input_index: address.index,
                 p2sh_address: address.address
@@ -84229,8 +84228,9 @@ Colu.prototype.signAndTransmit = function (assetInfo, attempts, callback) {
                 if (err) return cb(err)
                 return cb(null, JSON.parse(body).signed_tx)
               })},
-            function(err, fullySignedTxHex) {
+            function(err, partiallySignedTxHex) {
               if (err) return callback(err)
+              var fullySignedTxHex = ColoredCoins.signTx(partiallySignedTxHex, privateKeys, redeemScripts)
               self.transmit(fullySignedTxHex, lastTxid, function (err, resp) {
                 if (err) {
                   if (!err.assetInfo) return callback(err)
@@ -84246,6 +84246,10 @@ Colu.prototype.signAndTransmit = function (assetInfo, attempts, callback) {
       )
     }
   )
+}
+
+Colu.prototype.getP2SHAddress = function() {
+  return this.hdwallet.getAddress(0, 0, true)
 }
 
 Colu.prototype.transmit = function (signedTxHex, lastTxid, callback) {
@@ -84682,7 +84686,7 @@ Colu.prototype.getIssuedAssets = function (transactions, callback) {
 
 module.exports = Colu
 
-},{"./events.js":408,"async":24,"coloredcoinsd-wraper":106,"data-storage":121,"events":178,"hdwallet":214,"request":321,"util":402}],408:[function(require,module,exports){
+},{"./events.js":408,"async":24,"bitcoinjs-lib":47,"coloredcoinsd-wraper":106,"data-storage":121,"events":178,"hdwallet":214,"request":321,"util":402}],408:[function(require,module,exports){
 var util = require('util')
 var events = require('events')
 var io = require('socket.io-client')
